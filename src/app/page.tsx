@@ -14,10 +14,21 @@ export default function Home() {
   const defaultCacheEntries = 10;
   const cachePrefixRef = useRef<string>('');
   const cacheReadyRef = useRef<boolean>(false);
+  const pendingRequests = useRef<number>(0);
   const debugLog = (...args: unknown[]) => {
     if (typeof window === 'undefined') return;
     if (process.env.NODE_ENV === 'production') return;
     console.log('[translate-debug]', ...args);
+  };
+
+  const startLoading = () => {
+    pendingRequests.current += 1;
+    setIsLoading(true);
+  };
+
+  const stopLoading = () => {
+    pendingRequests.current = Math.max(0, pendingRequests.current - 1);
+    if (pendingRequests.current === 0) setIsLoading(false);
   };
   type CachedEntry = { language: 'en' | 'pt'; page: number; text: string };
   const [file, setFile] = useState<File | null>(null);
@@ -186,7 +197,9 @@ export default function Home() {
     if (!autoTranslate) return;
     const clean = text.trim();
     if (!clean || clean.length < minChars) {
-      setWarnings((prev) => ({ ...prev, [pageNum]: `Page text too short (${clean.length}/${minChars}). Not translating.` }));
+      const msg = `Page text too short (${clean.length}/${minChars}). Not translating.`;
+      setWarnings((prev) => ({ ...prev, [pageNum]: msg }));
+      setTranslations((prev) => ({ ...prev, [pageNum]: msg }));
       return; // skip tiny snippets to avoid noisy/expensive calls
     }
     setWarnings((prev) => {
@@ -197,9 +210,7 @@ export default function Home() {
     if (translations[pageNum] || fetchingPages.current.has(pageNum)) return;
 
     fetchingPages.current.add(pageNum);
-
-    // If it's the current page, show loading state
-    if (pageNum === currentPage) setIsLoading(true);
+    startLoading();
 
     try {
       const response = await fetch('/api/translate', {
@@ -250,9 +261,9 @@ export default function Home() {
       setWarnings((prev) => ({ ...prev, [pageNum]: `Error translating page (${(error as Error)?.message || 'Unknown error'})` }));
     } finally {
       fetchingPages.current.delete(pageNum);
-      if (pageNum === currentPage) setIsLoading(false);
+      stopLoading();
     }
-    }, [translations, currentPage, minChars, autoTranslate, language, apiKey, saveCachedTranslation, getCachedTranslation]);
+    }, [translations, minChars, autoTranslate, language, apiKey, saveCachedTranslation, getCachedTranslation]);
 
     const fetchTranslationBatch = useCallback(async (pages: { page: number; text: string }[]) => {
       if (!autoTranslate) return;
@@ -272,7 +283,9 @@ export default function Home() {
         }
         const clean = text.trim();
         if (!clean || clean.length < minChars) {
-          setWarnings((prev) => ({ ...prev, [page]: `Page text too short (${clean.length}/${minChars}). Not translating.` }));
+          const msg = `Page text too short (${clean.length}/${minChars}). Not translating.`;
+          setWarnings((prev) => ({ ...prev, [page]: msg }));
+          setTranslations((prev) => ({ ...prev, [page]: msg }));
           skipped.push({ page, reason: 'too-short' });
           return false;
         }
@@ -293,8 +306,7 @@ export default function Home() {
       if (!pending.length) return;
 
       pending.forEach(({ page }) => fetchingPages.current.add(page));
-      const includesCurrent = pending.some(({ page }) => page === currentPage);
-      if (includesCurrent) setIsLoading(true);
+      if (pending.length) startLoading();
 
       try {
         const response = await fetch('/api/translate', {
@@ -365,9 +377,9 @@ export default function Home() {
         });
       } finally {
         pending.forEach(({ page }) => fetchingPages.current.delete(page));
-        if (includesCurrent) setIsLoading(false);
+        if (pending.length) stopLoading();
       }
-    }, [autoTranslate, currentPage, maxBatchPages, minChars, translations, language, apiKey, saveCachedTranslation, getCachedTranslation]);
+    }, [autoTranslate, maxBatchPages, minChars, translations, language, apiKey, saveCachedTranslation, getCachedTranslation]);
 
   const ensureCachePrefix = useCallback(async (file: File | null) => {
     if (!file) return;
@@ -401,6 +413,27 @@ export default function Home() {
       Object.entries(additionalTexts).forEach(([page, text]) => {
         pageTextCache.current[Number(page)] = text;
       });
+    }
+
+    const cleanCurrent = currentText.trim();
+    if (autoTranslate && cleanCurrent.length < minChars) {
+      const existingTranslation = translations[pageNumber];
+      if (!existingTranslation) {
+        const msg = `Page text too short (${cleanCurrent.length}/${minChars}). Not translating.`;
+        setWarnings((prev) => ({ ...prev, [pageNumber]: msg }));
+        setTranslations((prev) => ({ ...prev, [pageNumber]: msg }));
+      } else {
+        // Keep the already-fetched translation visible instead of overwriting with a warning
+        setWarnings((prev) => {
+          if (!prev[pageNumber]) return prev;
+          const next = { ...prev };
+          delete next[pageNumber];
+          return next;
+        });
+      }
+      // Still allow batching for subsequent pages, but skip this one
+      // by returning here; next/other pages can be handled on next page change.
+      return;
     }
 
     if (batchTranslate) {
@@ -451,7 +484,7 @@ export default function Home() {
         fetchTranslation(nextText, pageNumber + 1);
       }
     }
-  }, [batchTranslate, fetchTranslation, fetchTranslationBatch, maxBatchPages, pageCount, translations]);
+  }, [autoTranslate, batchTranslate, fetchTranslation, fetchTranslationBatch, maxBatchPages, minChars, pageCount, translations]);
 
   useEffect(() => {
     ensureCachePrefix(file);

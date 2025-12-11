@@ -21,6 +21,11 @@ interface PDFViewerProps {
 export default function PDFViewer({ file, pageNumber, onPageNumberChange, onPageChange, onDocumentReady, width = 480, batchSize = 5 }: PDFViewerProps) {
   const [numPages, setNumPages] = useState<number>(0);
   const [pdfDocument, setPdfDocument] = useState<any>(null);
+  const handleRenderError = useCallback((error: Error) => {
+    // Ignore expected aborts triggered when quickly switching pages; surface others.
+    if ((error as { name?: string })?.name === 'AbortException') return;
+    console.warn('PDF render error', error);
+  }, []);
 
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
     setNumPages(numPages);
@@ -85,6 +90,7 @@ export default function PDFViewer({ file, pageNumber, onPageNumberChange, onPage
             setPdfDocument(pdf);
             onDocumentLoadSuccess({ numPages: pdf.numPages });
           }}
+          onLoadError={(error) => handleRenderError(error as Error)}
           className="max-w-full"
         >
           <Page 
@@ -92,6 +98,7 @@ export default function PDFViewer({ file, pageNumber, onPageNumberChange, onPage
             width={width}
             renderTextLayer={true}
             renderAnnotationLayer={true}
+            onRenderError={handleRenderError}
           />
         </Document>
       </div>
