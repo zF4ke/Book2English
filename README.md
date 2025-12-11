@@ -6,6 +6,8 @@ A little web app for reading books in English, even when they were not written t
 
 Everything stays in your browser, no accounts, no uploads, just you and the book.
 
+**[Try it live →](https://book2english.vercel.app/)**
+
 ![Reading desk interface](images/frontpage.png)
 
 ## How it works
