@@ -11,10 +11,22 @@ const PDFViewer = dynamic(() => import('@/components/PDFViewer'), {
 export default function Home() {
   const defaultMinChars = Number(process.env.NEXT_PUBLIC_MIN_TRANSLATE_CHARS || 16);
   const defaultMaxBatchPages = Number(process.env.NEXT_PUBLIC_MAX_BATCH_PAGES || 2);
+  const defaultGeminiModel = String(process.env.NEXT_PUBLIC_GEMINI_MODEL || 'gemini-2.5-flash');
+  const geminiFreeModels: Array<{ id: string; label: string }> = [
+    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash (preview)' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { id: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash-Lite' },
+    { id: 'gemini-2.5-flash-preview-09-2025', label: 'Gemini 2.5 Flash (preview 09-2025)' },
+    { id: 'gemini-2.5-flash-lite-preview-09-2025', label: 'Gemini 2.5 Flash-Lite (preview 09-2025)' },
+  ];
   const defaultCacheEntries = 10;
   const cachePrefixRef = useRef<string>('');
   const cacheReadyRef = useRef<boolean>(false);
   const pendingRequests = useRef<number>(0);
+  const modelInitRef = useRef<boolean>(false);
   const debugLog = (...args: unknown[]) => {
     if (typeof window === 'undefined') return;
     if (process.env.NODE_ENV === 'production') return;
@@ -50,6 +62,7 @@ export default function Home() {
   const [minChars, setMinChars] = useState<number>(defaultMinChars);
   const [maxBatchPages, setMaxBatchPages] = useState<number>(defaultMaxBatchPages);
   const [apiKey, setApiKey] = useState<string>('');
+  const [geminiModel, setGeminiModel] = useState<string>(defaultGeminiModel);
   const [cacheTranslationsEnabled, setCacheTranslationsEnabled] = useState<boolean>(true);
   const [maxCachedEntries, setMaxCachedEntries] = useState<number>(defaultCacheEntries);
   const [pageInput, setPageInput] = useState<string>('1');
@@ -59,11 +72,20 @@ export default function Home() {
   const jumpDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [warnings, setWarnings] = useState<Record<number, string>>({});
 
+  const getCacheStorageKey = useCallback(() => {
+    if (!cachePrefixRef.current) return null;
+    const modelPart = (geminiModel || defaultGeminiModel).trim() || 'default';
+    return `cachedTranslations:${cachePrefixRef.current}:model:${modelPart}`;
+  }, [geminiModel, defaultGeminiModel]);
+
   // Load persisted settings once on mount
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const storedKey = window.localStorage.getItem('geminiApiKey');
     if (storedKey) setApiKey(storedKey);
+
+    const storedModel = window.localStorage.getItem('geminiModel');
+    if (storedModel && storedModel.trim()) setGeminiModel(storedModel.trim());
 
     const storedMin = window.localStorage.getItem('minChars');
     if (storedMin && !Number.isNaN(Number(storedMin))) setMinChars(Number(storedMin));
@@ -78,6 +100,16 @@ export default function Home() {
     if (storedCacheSize && !Number.isNaN(Number(storedCacheSize))) setMaxCachedEntries(Number(storedCacheSize));
   }, []);
 
+  useEffect(() => {
+    if (!modelInitRef.current) {
+      modelInitRef.current = true;
+      return;
+    }
+    fetchingPages.current.clear();
+    setTranslations({});
+    setWarnings({});
+  }, [geminiModel]);
+
   // Persist settings to localStorage
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -87,6 +119,11 @@ export default function Home() {
       window.localStorage.removeItem('geminiApiKey');
     }
   }, [apiKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('geminiModel', geminiModel);
+  }, [geminiModel]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -109,10 +146,11 @@ export default function Home() {
   }, [maxCachedEntries]);
 
   const loadCachedTranslations = useCallback((lang: 'en' | 'pt') => {
-    if (!cachePrefixRef.current) return {} as Record<number, string>;
+    const storageKey = getCacheStorageKey();
+    if (!storageKey) return {} as Record<number, string>;
     if (typeof window === 'undefined') return {} as Record<number, string>;
     try {
-      const raw = window.localStorage.getItem(`cachedTranslations:${cachePrefixRef.current}`);
+      const raw = window.localStorage.getItem(storageKey);
       if (!raw) return {} as Record<number, string>;
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return {} as Record<number, string>;
@@ -127,32 +165,34 @@ export default function Home() {
       console.warn('Failed to load cached translations', e);
       return {} as Record<number, string>;
     }
-  }, []);
+  }, [getCacheStorageKey]);
 
   const saveCachedTranslation = useCallback((lang: 'en' | 'pt', page: number, text: string) => {
-    if (!cachePrefixRef.current) return;
+    const storageKey = getCacheStorageKey();
+    if (!storageKey) return;
     if (!cacheTranslationsEnabled) return;
     if (typeof window === 'undefined') return;
     try {
-      const raw = window.localStorage.getItem(`cachedTranslations:${cachePrefixRef.current}`);
+      const raw = window.localStorage.getItem(storageKey);
       const parsedList = raw ? JSON.parse(raw) : [];
       const list = Array.isArray(parsedList) ? parsedList : [];
       const filtered = list.filter((entry: CachedEntry) => !(entry && entry.language === lang && entry.page === page));
       filtered.unshift({ language: lang, page, text });
       const trimmed = filtered.slice(0, Math.max(1, maxCachedEntries));
-      window.localStorage.setItem(`cachedTranslations:${cachePrefixRef.current}`, JSON.stringify(trimmed));
+      window.localStorage.setItem(storageKey, JSON.stringify(trimmed));
     } catch (e) {
       console.warn('Failed to save cached translation', e);
     }
-  }, [cacheTranslationsEnabled, maxCachedEntries]);
+  }, [cacheTranslationsEnabled, maxCachedEntries, getCacheStorageKey]);
 
   const getCachedTranslation = useCallback(
     (lang: 'en' | 'pt', page: number) => {
       if (translations[page]) return translations[page];
-      if (!cachePrefixRef.current) return undefined;
+      const storageKey = getCacheStorageKey();
+      if (!storageKey) return undefined;
       if (typeof window === 'undefined') return undefined;
       try {
-        const raw = window.localStorage.getItem(`cachedTranslations:${cachePrefixRef.current}`);
+        const raw = window.localStorage.getItem(storageKey);
         if (!raw) return undefined;
         const list = JSON.parse(raw);
         if (!Array.isArray(list)) return undefined;
@@ -166,7 +206,7 @@ export default function Home() {
       }
       return undefined;
     },
-    [translations]
+    [translations, getCacheStorageKey]
   );
 
   useEffect(() => {
@@ -175,7 +215,7 @@ export default function Home() {
     if (Object.keys(cached).length) {
       setTranslations((prev) => ({ ...cached, ...prev }));
     }
-  }, [language, loadCachedTranslations]);
+  }, [language, geminiModel, loadCachedTranslations]);
 
   function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const { files } = event.target;
@@ -216,7 +256,7 @@ export default function Home() {
       const response = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, language, apiKey }),
+        body: JSON.stringify({ text, language, apiKey, model: geminiModel }),
       });
 
       if (!response.ok) {
@@ -263,7 +303,7 @@ export default function Home() {
       fetchingPages.current.delete(pageNum);
       stopLoading();
     }
-    }, [translations, minChars, autoTranslate, language, apiKey, saveCachedTranslation, getCachedTranslation]);
+    }, [translations, minChars, autoTranslate, language, apiKey, geminiModel, saveCachedTranslation, getCachedTranslation]);
 
     const fetchTranslationBatch = useCallback(async (pages: { page: number; text: string }[]) => {
       if (!autoTranslate) return;
@@ -312,7 +352,7 @@ export default function Home() {
         const response = await fetch('/api/translate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ language, apiKey, pages: pending.map(({ page, text }) => ({ page, text: text.trim() })) }),
+          body: JSON.stringify({ language, apiKey, model: geminiModel, pages: pending.map(({ page, text }) => ({ page, text: text.trim() })) }),
         });
         debugLog('batch:request', pending.map((p) => p.page));
 
@@ -379,7 +419,7 @@ export default function Home() {
         pending.forEach(({ page }) => fetchingPages.current.delete(page));
         if (pending.length) stopLoading();
       }
-    }, [autoTranslate, maxBatchPages, minChars, translations, language, apiKey, saveCachedTranslation, getCachedTranslation]);
+    }, [autoTranslate, maxBatchPages, minChars, translations, language, apiKey, geminiModel, saveCachedTranslation, getCachedTranslation]);
 
   const ensureCachePrefix = useCallback(async (file: File | null) => {
     if (!file) return;
@@ -816,6 +856,22 @@ export default function Home() {
                           </div>
                           <p className="text-xs text-[#d7c6b4] mt-1">Stored locally in your browser and sent only with translate requests.</p>
                         </div>
+
+                        <div>
+                          <label className="block text-xs uppercase tracking-[0.15em] text-[#e7d8c4] mb-1">Model</label>
+                          <select
+                            value={geminiModel}
+                            onChange={(e) => setGeminiModel(e.target.value)}
+                            className="w-full rounded-lg border border-[#5a4836] px-3 py-2 text-sm bg-[#3a2d20] text-[#fdf4e6] focus:outline-none focus:ring-2 focus:ring-[#c8b58f]"
+                          >
+                            {geminiFreeModels.map((m) => (
+                              <option key={m.id} value={m.id} className="bg-[#3a2d20]">
+                                {m.label}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="text-xs text-[#d7c6b4] mt-1">Applies to new translation requests (use Retry to retranslate a page).</p>
+                        </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <label className="block text-xs uppercase tracking-[0.12em] text-[#e7d8c4] mb-1 whitespace-nowrap">Min chars</label>
@@ -870,9 +926,10 @@ export default function Home() {
                         <div className="flex items-center justify-between gap-3 text-[#e7d8c4]">
                           <button
                             onClick={() => {
-                              if (!cachePrefixRef.current) return;
+                              const storageKey = getCacheStorageKey();
+                              if (!storageKey) return;
                               if (typeof window === 'undefined') return;
-                              window.localStorage.removeItem(`cachedTranslations:${cachePrefixRef.current}`);
+                              window.localStorage.removeItem(storageKey);
                               setTranslations({});
                             }}
                             className="text-sm text-[#f1c9a1] hover:underline cursor-pointer"
@@ -887,6 +944,7 @@ export default function Home() {
                               setApiKey('');
                               setMinChars(defaultMinChars);
                               setMaxBatchPages(defaultMaxBatchPages);
+                              setGeminiModel(defaultGeminiModel);
                             }}
                             className="text-sm text-[#f1c9a1] hover:underline cursor-pointer"
                           >

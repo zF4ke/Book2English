@@ -4,7 +4,18 @@ import { NextResponse } from "next/server";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { text, pages, language, apiKey: userApiKey } = body;
+    const { text, pages, language, apiKey: userApiKey, model: requestedModel } = body;
+
+    const allowedModels = new Set<string>([
+      'gemini-3-flash-preview',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-2.5-flash-preview-09-2025',
+      'gemini-2.5-flash-lite-preview-09-2025',
+    ]);
 
     const parseJsonLoose = (raw: string) => {
       const trimmed = raw.trim();
@@ -40,8 +51,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "GEMINI_API_KEY is not set" }, { status: 500 });
     }
 
-    // Allow overriding the model; default to a broadly available, fast model
-    const modelId = process.env.GEMINI_MODEL || "gemini-1.5-flash-latest";
+    // Allow overriding the model from the client (settings dropdown), but only for a known-safe allowlist.
+    // Fallback order: request -> env -> default.
+    const requestedModelId = typeof requestedModel === 'string' ? requestedModel.trim() : '';
+    const modelId = (requestedModelId && allowedModels.has(requestedModelId))
+      ? requestedModelId
+      : (process.env.GEMINI_MODEL || 'gemini-2.5-flash');
 
     // GoogleGenerativeAI currently defaults to v1; if the SDK adds apiVersion later,
     // remove this comment and pass the option. Keeping single-arg to satisfy typings.
