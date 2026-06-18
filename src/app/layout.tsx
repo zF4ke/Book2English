@@ -18,8 +18,9 @@ const crimsonPro = Crimson_Pro({
 });
 
 export const metadata: Metadata = {
-  title: "Book to English",
-  description: "Read and translate books seamlessly",
+  title: "Book to English — read any book in your language",
+  description:
+    "Drop in a PDF and read it in English or Portuguese, rendered in place with the original layout preserved.",
 };
 
 export default function RootLayout({

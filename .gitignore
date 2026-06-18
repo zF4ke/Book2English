@@ -36,6 +36,12 @@ yarn-error.log*
 # vercel
 .vercel
 
+# pdf.js assets copied from node_modules at install/build time
+/public/pdfjs
+
+# local editor / agent tooling
+/.claude
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

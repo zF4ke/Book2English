@@ -1,112 +1,141 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { NextResponse } from "next/server";
+import { NextResponse } from 'next/server';
+import { DEFAULT_MODEL } from '@/lib/models';
+
+export const runtime = 'edge';
+
+type Block = { id: string; text: string };
+
+function parseJsonLoose(raw: string): unknown {
+  const trimmed = raw.trim();
+  const noFences = trimmed
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```$/i, '')
+    .trim();
+  const candidates = [noFences];
+  const first = noFences.indexOf('{');
+  const last = noFences.lastIndexOf('}');
+  if (first !== -1 && last > first) candidates.push(noFences.slice(first, last + 1));
+  for (const c of candidates) {
+    try {
+      return JSON.parse(c);
+    } catch {
+      // keep trying
+    }
+  }
+  return null;
+}
 
 export async function POST(req: Request) {
+  let body: {
+    blocks?: Block[];
+    language?: string;
+    apiKey?: string;
+    model?: string;
+  };
   try {
-    const body = await req.json();
-    const { text, pages, language, apiKey: userApiKey, model: requestedModel } = body;
-
-    const allowedModels = new Set<string>([
-      'gemini-3-flash-preview',
-      'gemini-2.5-pro',
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
-      'gemini-2.0-flash-lite',
-      'gemini-2.5-flash-preview-09-2025',
-      'gemini-2.5-flash-lite-preview-09-2025',
-    ]);
-
-    const parseJsonLoose = (raw: string) => {
-      const trimmed = raw.trim();
-      const withoutFences = trimmed
-        .replace(/^```json\s*/i, "")
-        .replace(/^```/i, "")
-        .replace(/```$/i, "")
-        .trim();
-      const candidates = [withoutFences];
-      const firstBrace = withoutFences.indexOf("{");
-      const lastBrace = withoutFences.lastIndexOf("}");
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        candidates.push(withoutFences.slice(firstBrace, lastBrace + 1));
-      }
-      for (const candidate of candidates) {
-        try {
-          return JSON.parse(candidate);
-        } catch (e) {
-          // continue trying
-        }
-      }
-      return null;
-    };
-
-    if (!text && !Array.isArray(pages)) {
-      return NextResponse.json({ error: "No text provided" }, { status: 400 });
-    }
-
-    const targetLang = language === "pt" ? "Portuguese" : "English";
-
-    const apiKey = (typeof userApiKey === "string" && userApiKey.trim()) || process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: "GEMINI_API_KEY is not set" }, { status: 500 });
-    }
-
-    // Allow overriding the model from the client (settings dropdown), but only for a known-safe allowlist.
-    // Fallback order: request -> env -> default.
-    const requestedModelId = typeof requestedModel === 'string' ? requestedModel.trim() : '';
-    const modelId = (requestedModelId && allowedModels.has(requestedModelId))
-      ? requestedModelId
-      : (process.env.GEMINI_MODEL || 'gemini-2.5-flash');
-
-    // GoogleGenerativeAI currently defaults to v1; if the SDK adds apiVersion later,
-    // remove this comment and pass the option. Keeping single-arg to satisfy typings.
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: modelId });
-
-    // Batch mode: translate multiple pages in one prompt
-    if (Array.isArray(pages)) {
-      const cleaned = pages
-        .filter((p: any) => p && p.page && typeof p.page === "number" && p.text)
-        .map((p: any) => ({ page: p.page, text: String(p.text) }));
-
-      if (!cleaned.length) {
-        return NextResponse.json({ error: "No valid pages provided" }, { status: 400 });
-      }
-
-      const pageText = cleaned
-        .sort((a, b) => a.page - b.page)
-        .map(({ page, text }) => `Page ${page}:\n${text}`)
-        .join("\n\n---\n\n");
-
-      const prompt = `You are translating multiple consecutive book pages into ${targetLang}. For each page, preserve the original flow and paragraph breaks so it matches the source layout. Do not add headings, numbering, or commentary beyond the page markers. Return plain text only, with each page clearly separated and labeled as provided.\n\n${pageText}\n\nReturn JSON with an array under the key "translations", each item shaped like {"page": <number>, "text": "<translated page text>"}.`;
-
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const raw = response.text();
-
-      const parsed = parseJsonLoose(raw);
-      if (parsed && Array.isArray((parsed as any).translations)) {
-        return NextResponse.json({ translations: (parsed as any).translations });
-      }
-
-      // Fallback: if the model didn't return usable JSON, return raw text per page
-      const fallbackTranslations = cleaned.map(({ page }) => ({ page, text: raw }));
-      return NextResponse.json({ translations: fallbackTranslations });
-    }
-
-    // Single page mode
-    const prompt = `You are translating a book page into ${targetLang}. Preserve the original flow and add clean paragraph breaks so it reads like the source layout. Do not add headings, numbering, or commentary. Output plain text only.\n\nOriginal page text:\n${text}\n\nReturn only the translated text with intentional line breaks between paragraphs.`;
-
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const translatedText = response.text();
-
-    return NextResponse.json({ translation: translatedText });
-  } catch (error) {
-    console.error("Error translating text:", error);
-    const status = typeof (error as any)?.status === "number" ? (error as any).status : 500;
-    const statusText = (error as any)?.statusText || (error as any)?.message || "Failed to translate text";
-    const details = (error as any)?.errorDetails || (error as any)?.details;
-    return NextResponse.json({ error: statusText, details }, { status });
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
+
+  const { blocks, language, apiKey, model } = body;
+
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    return NextResponse.json({ error: 'No blocks provided' }, { status: 400 });
+  }
+
+  const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!key) {
+    return NextResponse.json(
+      { error: 'Missing OpenRouter API key. Add yours in Settings.' },
+      { status: 401 }
+    );
+  }
+
+  const targetLang = language === 'pt' ? 'Portuguese' : 'English';
+  // BYO key: the user pays with their own key, so any model id they pick is fine.
+  const modelId = typeof model === 'string' && model.trim() ? model.trim() : DEFAULT_MODEL;
+
+  const cleaned = blocks
+    .filter((b) => b && typeof b.id === 'string' && typeof b.text === 'string' && b.text.trim())
+    .map((b) => ({ id: b.id, text: b.text.trim() }));
+
+  if (!cleaned.length) {
+    return NextResponse.json({ error: 'No translatable text in blocks' }, { status: 400 });
+  }
+
+  const payload = cleaned.map((b) => ({ id: b.id, text: b.text }));
+
+  const system =
+    `You are a professional literary translator. Translate each text segment into ${targetLang}. ` +
+    `Preserve meaning, tone, and register. Do NOT add commentary, notes, titles, or quotation marks. ` +
+    `Translate every segment, even short ones. If a segment is a proper noun, number, or already in ${targetLang}, return it unchanged. ` +
+    `Return ONLY valid JSON of the exact shape {"translations":[{"id":"<id>","text":"<translation>"}]} with one entry per input id.`;
+
+  const user = JSON.stringify({ segments: payload });
+
+  let res: Response;
+  try {
+    res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://book2english.vercel.app',
+        'X-Title': 'Book2English',
+      },
+      body: JSON.stringify({
+        model: modelId,
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { error: `Could not reach OpenRouter: ${(e as Error)?.message || 'network error'}` },
+      { status: 502 }
+    );
+  }
+
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const err = await res.json();
+      detail = err?.error?.message || err?.error || '';
+    } catch {
+      detail = await res.text().catch(() => '');
+    }
+    return NextResponse.json(
+      { error: `OpenRouter error (${res.status})${detail ? `: ${detail}` : ''}` },
+      { status: res.status }
+    );
+  }
+
+  let content = '';
+  try {
+    const data = await res.json();
+    content = data?.choices?.[0]?.message?.content ?? '';
+  } catch {
+    return NextResponse.json({ error: 'Malformed response from OpenRouter' }, { status: 502 });
+  }
+
+  const parsed = parseJsonLoose(content) as { translations?: Array<{ id: string; text: string }> } | null;
+  if (parsed && Array.isArray(parsed.translations)) {
+    const valid = parsed.translations.filter(
+      (t) => t && typeof t.id === 'string' && typeof t.text === 'string'
+    );
+    return NextResponse.json({ translations: valid });
+  }
+
+  // Single-block fallback: model may have returned bare text.
+  if (cleaned.length === 1 && content.trim()) {
+    return NextResponse.json({ translations: [{ id: cleaned[0].id, text: content.trim() }] });
+  }
+
+  return NextResponse.json({ error: 'Could not parse translation output' }, { status: 502 });
 }
