@@ -90,6 +90,15 @@ export default function PdfReader() {
     if (pa >= 1 && pa <= 20) setPrefetchAhead(pa);
     const z = Number(localStorage.getItem('zoom'));
     if (z >= MIN_ZOOM && z <= MAX_ZOOM) setZoom(z);
+    if (localStorage.getItem('showOriginal') === 'true') setShowOriginal(true);
+  }, []);
+
+  // Ask the browser to never evict our settings (localStorage) or translation
+  // cache (IndexedDB) under storage pressure — keep them around indefinitely.
+  useEffect(() => {
+    navigator.storage?.persisted?.().then((granted) => {
+      if (!granted) navigator.storage?.persist?.();
+    });
   }, []);
 
   // Fetch the live model catalogue + pricing once.
@@ -106,6 +115,7 @@ export default function PdfReader() {
   useEffect(() => void localStorage.setItem('fontScale', String(fontScale)), [fontScale]);
   useEffect(() => void localStorage.setItem('prefetchAhead', String(prefetchAhead)), [prefetchAhead]);
   useEffect(() => void localStorage.setItem('zoom', String(zoom)), [zoom]);
+  useEffect(() => void localStorage.setItem('showOriginal', String(showOriginal)), [showOriginal]);
 
   // Responsive container width.
   useEffect(() => {
