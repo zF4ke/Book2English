@@ -9,7 +9,7 @@ import { loadDocument } from '@/lib/pdf/loadPdf';
 import { extractLayout } from '@/lib/pdf/extract';
 import { translatePage, createLimiter, TranslateError, type Lang } from '@/lib/translate/client';
 import { clearBook } from '@/lib/cache/translationDB';
-import { DEFAULT_MODEL, FALLBACK_MODELS, loadModels, type ModelInfo } from '@/lib/models';
+import { DEFAULT_MODEL, FALLBACK_GROUPS, loadModels, type ModelGroups } from '@/lib/models';
 import TranslatedPage from './TranslatedPage';
 import SettingsSheet from './SettingsSheet';
 
@@ -50,7 +50,7 @@ export default function PdfReader() {
   const [showOriginal, setShowOriginal] = useState(false);
   const [prefetchAhead, setPrefetchAhead] = useState(4);
   const [zoom, setZoom] = useState(1);
-  const [models, setModels] = useState<ModelInfo[]>(FALLBACK_MODELS);
+  const [models, setModels] = useState<ModelGroups>(FALLBACK_GROUPS);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Translation + view state.

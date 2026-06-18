@@ -3,7 +3,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import type { ModelInfo } from '@/lib/models';
+import type { ModelGroups } from '@/lib/models';
 import ModelPicker from './ModelPicker';
 
 type Props = {
@@ -13,7 +13,7 @@ type Props = {
   setApiKey: (v: string) => void;
   model: string;
   setModel: (v: string) => void;
-  models: ModelInfo[];
+  models: ModelGroups;
   fontScale: number;
   setFontScale: (v: number) => void;
   showOriginal: boolean;
@@ -97,7 +97,7 @@ export default function SettingsSheet(props: Props) {
             <label className="block text-xs font-semibold uppercase tracking-[0.14em] text-[#8a7564]">
               Model
             </label>
-            <ModelPicker models={models} value={model} onChange={setModel} />
+            <ModelPicker groups={models} value={model} onChange={setModel} />
           </section>
 
           <section className="space-y-3">

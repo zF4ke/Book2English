@@ -1,17 +1,23 @@
-// Custom model dropdown: shows each model's name with its live per-1M-token
-// price (input / output), a check on the selected one, and a free badge.
+// Grouped model dropdown: Recommended / Cheaper-slower / Others, each row showing
+// the model name and its live per-1M-token price (input / output).
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { formatPrice, type ModelInfo } from '@/lib/models';
+import { allModels, formatPrice, type ModelGroups, type ModelInfo } from '@/lib/models';
 
 type Props = {
-  models: ModelInfo[];
+  groups: ModelGroups;
   value: string;
   onChange: (id: string) => void;
 };
 
-export default function ModelPicker({ models, value, onChange }: Props) {
+const SECTIONS: { key: keyof ModelGroups; label: string }[] = [
+  { key: 'recommended', label: 'Recommended' },
+  { key: 'cheaper', label: 'Cheaper / slower' },
+  { key: 'other', label: 'Others' },
+];
+
+export default function ModelPicker({ groups, value, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -29,9 +35,38 @@ export default function ModelPicker({ models, value, onChange }: Props) {
     };
   }, [open]);
 
-  const selected = models.find((m) => m.id === value);
+  const selected = allModels(groups).find((m) => m.id === value);
   const selectedLabel = selected?.name ?? value;
   const selectedPrice = selected ? formatPrice(selected) : '';
+
+  const row = (m: ModelInfo) => {
+    const isSel = m.id === value;
+    return (
+      <button
+        key={m.id}
+        type="button"
+        onClick={() => {
+          onChange(m.id);
+          setOpen(false);
+        }}
+        className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-[#f6efe3] ${
+          isSel ? 'bg-[#f6efe3]' : ''
+        }`}
+      >
+        <span className="truncate text-[#2f251a]">{m.name}</span>
+        <span className="flex shrink-0 items-center gap-2">
+          <span className={`tabular-nums text-xs ${m.free ? 'text-[#4f7a52]' : 'text-[#8a7a6b]'}`}>
+            {formatPrice(m)}
+          </span>
+          {isSel && (
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-[#a4573f]" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </span>
+      </button>
+    );
+  };
 
   return (
     <div ref={ref} className="relative">
@@ -42,9 +77,7 @@ export default function ModelPicker({ models, value, onChange }: Props) {
       >
         <span className="truncate font-medium text-[#2f251a]">{selectedLabel}</span>
         <span className="flex shrink-0 items-center gap-2">
-          {selectedPrice && (
-            <span className="tabular-nums text-xs text-[#8a7a6b]">{selectedPrice}</span>
-          )}
+          {selectedPrice && <span className="tabular-nums text-xs text-[#8a7a6b]">{selectedPrice}</span>}
           <svg
             viewBox="0 0 24 24"
             className={`h-4 w-4 text-[#8a7a6b] transition-transform ${open ? 'rotate-180' : ''}`}
@@ -58,35 +91,17 @@ export default function ModelPicker({ models, value, onChange }: Props) {
       </button>
 
       {open && (
-        <div className="absolute z-10 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border border-[#e3d5c0] bg-white py-1 shadow-xl">
-          {models.map((m) => {
-            const isSel = m.id === value;
+        <div className="absolute z-10 mt-2 max-h-96 w-full overflow-y-auto rounded-xl border border-[#e3d5c0] bg-white py-1 shadow-xl">
+          {SECTIONS.map(({ key, label }) => {
+            const items = groups[key];
+            if (!items.length) return null;
             return (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => {
-                  onChange(m.id);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm hover:bg-[#f6efe3] ${
-                  isSel ? 'bg-[#f6efe3]' : ''
-                }`}
-              >
-                <span className="truncate text-[#2f251a]">{m.name}</span>
-                <span className="flex shrink-0 items-center gap-2">
-                  <span
-                    className={`tabular-nums text-xs ${m.free ? 'text-[#4f7a52]' : 'text-[#8a7a6b]'}`}
-                  >
-                    {formatPrice(m)}
-                  </span>
-                  {isSel && (
-                    <svg viewBox="0 0 24 24" className="h-4 w-4 text-[#a4573f]" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  )}
-                </span>
-              </button>
+              <div key={key}>
+                <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#a3917c]">
+                  {label}
+                </div>
+                {items.map(row)}
+              </div>
             );
           })}
         </div>
