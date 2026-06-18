@@ -7,7 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api';
 import { loadDocument } from '@/lib/pdf/loadPdf';
 import { extractLayout } from '@/lib/pdf/extract';
-import { translatePage, createLimiter, type Lang } from '@/lib/translate/client';
+import { translatePage, createLimiter, TranslateError, type Lang } from '@/lib/translate/client';
 import { clearBook } from '@/lib/cache/translationDB';
 import { DEFAULT_MODEL, FALLBACK_MODELS, loadModels, type ModelInfo } from '@/lib/models';
 import TranslatedPage from './TranslatedPage';
@@ -176,7 +176,12 @@ export default function PdfReader() {
         setTranslations((prev) => ({ ...prev, [p]: map }));
         setTransError('');
       } catch (e) {
-        setTransError((e as Error)?.message || 'Translation failed.');
+        // Only surface actionable errors (bad key, no credits). Transient ones
+        // (parse/5xx/network) already retried internally and will retry again
+        // when the page is re-visited — no need to spam the banner.
+        if (e instanceof TranslateError && e.actionable) {
+          setTransError(e.message);
+        }
       } finally {
         inflight.current.delete(key);
         if (inflight.current.size === 0) setBusy(false);

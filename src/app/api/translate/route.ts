@@ -88,7 +88,15 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         model: modelId,
         temperature: 0.2,
+        // Generous ceiling so the JSON response isn't truncated mid-string
+        // (truncation is the main cause of unparseable output).
+        max_tokens: 8000,
         response_format: { type: 'json_object' },
+        // Provider routing: non-Google models otherwise default to cheaper but
+        // slower third-party providers. `throughput` picks the fastest provider
+        // for the chosen model; `require_parameters` ensures the provider honors
+        // response_format/max_tokens (a silent drop produces non-JSON output).
+        provider: { sort: 'throughput', require_parameters: true },
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },

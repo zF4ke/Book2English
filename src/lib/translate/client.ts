@@ -16,17 +16,32 @@ export type TranslateOpts = {
 
 type SrcBlock = { id: string; text: string };
 
-const MAX_BLOCKS_PER_REQUEST = 40;
-const MAX_CHARS_PER_REQUEST = 6000;
+// Smaller batches keep each model response short enough to stay valid JSON
+// (long responses risk truncation -> unparseable output).
+const MAX_BLOCKS_PER_REQUEST = 20;
+const MAX_CHARS_PER_REQUEST = 3500;
+const MAX_ATTEMPTS = 3;
+
+// 401 (key), 402 (credits), 400 (bad request) are not worth retrying.
+const NON_RETRYABLE = new Set([400, 401, 402]);
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export class TranslateError extends Error {
+  constructor(message: string, readonly actionable: boolean) {
+    super(message);
+    this.name = 'TranslateError';
+  }
+}
 
 function norm(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-async function requestChunk(
+async function requestOnce(
   blocks: SrcBlock[],
   opts: TranslateOpts
-): Promise<Record<string, string>> {
+): Promise<{ map: Record<string, string>; status: number }> {
   const res = await fetch('/api/translate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -46,14 +61,38 @@ async function requestChunk(
     } catch {
       // keep default
     }
-    throw new Error(msg);
+    throw new TranslateError(msg, NON_RETRYABLE.has(res.status));
   }
   const data = (await res.json()) as { translations?: Array<{ id: string; text: string }> };
   const map: Record<string, string> = {};
   for (const t of data.translations ?? []) {
     if (t && typeof t.id === 'string' && typeof t.text === 'string') map[t.id] = t.text;
   }
-  return map;
+  return { map, status: res.status };
+}
+
+// Retries transient failures (parse errors, 5xx, network) a few times so they
+// self-heal without surfacing to the UI. Auth/credit errors fail fast.
+async function requestChunk(
+  blocks: SrcBlock[],
+  opts: TranslateOpts
+): Promise<Record<string, string>> {
+  let last: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const { map } = await requestOnce(blocks, opts);
+      if (Object.keys(map).length === 0 && blocks.length > 0) {
+        throw new TranslateError('Empty translation', false);
+      }
+      return map;
+    } catch (e) {
+      last = e;
+      if (opts.signal?.aborted) throw e;
+      if (e instanceof TranslateError && e.actionable) throw e; // bad key/credits
+      if (attempt < MAX_ATTEMPTS) await delay(500 * attempt);
+    }
+  }
+  throw last instanceof Error ? last : new Error('Translation failed');
 }
 
 // Translate every block on a page. Returns blockId -> translated text for all
