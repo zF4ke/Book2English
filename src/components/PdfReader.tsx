@@ -64,6 +64,8 @@ export default function PdfReader() {
   const slotEls = useRef<Map<number, HTMLDivElement>>(new Map());
   const inflight = useRef<Set<string>>(new Set());
   const limiter = useRef(createLimiter(2));
+  // Shared across in-flight translation requests so we can cancel them all.
+  const abortRef = useRef<AbortController>(new AbortController());
   const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollThrottle = useRef(0);
   // Remembers the content point under the viewport center across a zoom change.
@@ -180,8 +182,9 @@ export default function PdfReader() {
           return;
         }
         setBusy(true);
+        const signal = abortRef.current.signal;
         const map = await limiter.current(() =>
-          translatePage(p, blocks, { fileHash, model, lang, apiKey })
+          translatePage(p, blocks, { fileHash, model, lang, apiKey, signal })
         );
         setTranslations((prev) => ({ ...prev, [p]: map }));
         setTransError('');
@@ -260,6 +263,19 @@ export default function PdfReader() {
     },
     [numPages]
   );
+
+  // Abort every in-flight translation and restart from what's on screen.
+  // Cached pages still serve instantly; only un-done pages re-request.
+  const cancelAndRestart = useCallback(() => {
+    abortRef.current.abort();
+    abortRef.current = new AbortController();
+    inflight.current.clear();
+    setBusy(false);
+    setTransError('');
+    // Clearing the in-memory map re-runs the translate effect for the visible
+    // pages + prefetch ahead (the "from this page" restart).
+    setTranslations({});
+  }, []);
 
   // Record the content point at the viewport's vertical center so we can keep it
   // anchored after the layout reflows at the new zoom.
@@ -483,6 +499,17 @@ export default function PdfReader() {
                 </button>
               ))}
             </div>
+            <button
+              onClick={cancelAndRestart}
+              className="rounded-full p-2 text-[#6e5d4f] hover:bg-[#efe4d3]"
+              aria-label="Cancel translations and restart from this page"
+              title="Cancel translations & restart from here"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 2v6h6" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M3 13a9 9 0 1 0 3-7.7L3 8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
             <button
               onClick={() => setSettingsOpen(true)}
               className="rounded-full p-2 text-[#6e5d4f] hover:bg-[#efe4d3]"
