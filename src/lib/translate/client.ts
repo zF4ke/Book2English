@@ -20,6 +20,9 @@ type SrcBlock = { id: string; text: string };
 // (long responses risk truncation -> unparseable output).
 const MAX_BLOCKS_PER_REQUEST = 20;
 const MAX_CHARS_PER_REQUEST = 3500;
+// Oversized paragraphs (e.g. a page-long academic block) are split into pieces
+// this big so no single response is long enough to get truncated.
+const MAX_UNIT_CHARS = 1200;
 const MAX_ATTEMPTS = 3;
 
 // 401 (key), 402 (credits), 400 (bad request) are not worth retrying.
@@ -36,6 +39,31 @@ export class TranslateError extends Error {
 
 function norm(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
+}
+
+// Split a long paragraph into sentence-bounded pieces no larger than
+// MAX_UNIT_CHARS, so each translation response stays short and complete.
+function splitText(text: string): string[] {
+  const t = text.trim();
+  if (t.length <= MAX_UNIT_CHARS) return [t];
+  const sentences = t.split(/(?<=[.!?…])\s+/);
+  const pieces: string[] = [];
+  let cur = '';
+  for (const s of sentences) {
+    if (cur && cur.length + 1 + s.length > MAX_UNIT_CHARS) {
+      pieces.push(cur);
+      cur = s;
+    } else {
+      cur = cur ? `${cur} ${s}` : s;
+    }
+    // A single sentence longer than the cap: hard-split as a last resort.
+    while (cur.length > MAX_UNIT_CHARS * 1.6) {
+      pieces.push(cur.slice(0, MAX_UNIT_CHARS));
+      cur = cur.slice(MAX_UNIT_CHARS);
+    }
+  }
+  if (cur) pieces.push(cur);
+  return pieces;
 }
 
 async function requestOnce(
@@ -108,48 +136,69 @@ export async function translatePage(
   const missing = blocks.filter((b) => b.text.trim() && !(b.id in result));
   if (!missing.length) return result;
 
-  // Dedupe identical source strings: translate once, fan out to all ids.
-  const repByText = new Map<string, string>(); // normText -> representative id
-  const idsByText = new Map<string, string[]>();
-  const repBlocks: SrcBlock[] = [];
+  // Expand each block into translation units (splitting oversized paragraphs).
+  const unitsByOrig = new Map<string, { idx: number; unitId: string }[]>();
+  const units: SrcBlock[] = [];
   for (const b of missing) {
-    const key = norm(b.text);
+    const pieces = splitText(b.text);
+    const list: { idx: number; unitId: string }[] = [];
+    pieces.forEach((piece, i) => {
+      const unitId = `${b.id}#${i}`;
+      units.push({ id: unitId, text: piece });
+      list.push({ idx: i, unitId });
+    });
+    unitsByOrig.set(b.id, list);
+  }
+
+  // Dedupe identical unit texts: translate once, fan out to all unit ids.
+  const idsByText = new Map<string, string[]>();
+  const repUnits: SrcBlock[] = [];
+  for (const u of units) {
+    const key = norm(u.text);
     if (!idsByText.has(key)) {
       idsByText.set(key, []);
-      repByText.set(key, b.id);
-      repBlocks.push({ id: b.id, text: b.text });
+      repUnits.push(u);
     }
-    idsByText.get(key)!.push(b.id);
+    idsByText.get(key)!.push(u.id);
   }
 
   // Chunk by count and character budget.
   const chunks: SrcBlock[][] = [];
   let chunk: SrcBlock[] = [];
   let chunkChars = 0;
-  for (const b of repBlocks) {
+  for (const u of repUnits) {
     if (
       chunk.length >= MAX_BLOCKS_PER_REQUEST ||
-      (chunk.length && chunkChars + b.text.length > MAX_CHARS_PER_REQUEST)
+      (chunk.length && chunkChars + u.text.length > MAX_CHARS_PER_REQUEST)
     ) {
       chunks.push(chunk);
       chunk = [];
       chunkChars = 0;
     }
-    chunk.push(b);
-    chunkChars += b.text.length;
+    chunk.push(u);
+    chunkChars += u.text.length;
   }
   if (chunk.length) chunks.push(chunk);
 
+  const unitMap: Record<string, string> = {};
   for (const c of chunks) {
     const map = await requestChunk(c, opts);
-    const fresh: Record<string, string> = {};
     for (const rep of c) {
-      const key = norm(rep.text);
       const translated = map[rep.id];
       if (translated === undefined) continue;
-      for (const id of idsByText.get(key) ?? [rep.id]) {
-        result[id] = translated;
-        fresh[id] = translated;
+      for (const uid of idsByText.get(norm(rep.text)) ?? [rep.id]) unitMap[uid] = translated;
+    }
+    // Reassemble any blocks whose units are now all translated; cache them.
+    const fresh: Record<string, string> = {};
+    for (const [origId, list] of unitsByOrig) {
+      if (origId in result) continue;
+      if (list.every((u) => unitMap[u.unitId] !== undefined)) {
+        const joined = [...list]
+          .sort((a, b) => a.idx - b.idx)
+          .map((u) => unitMap[u.unitId])
+          .join(' ');
+        result[origId] = joined;
+        fresh[origId] = joined;
       }
     }
     if (Object.keys(fresh).length) {

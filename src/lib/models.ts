@@ -21,7 +21,6 @@ export const DEFAULT_MODEL = 'google/gemini-2.5-flash-lite';
 // Current-gen models with the best quality / speed / price balance.
 const RECOMMENDED_IDS = [
   'google/gemini-2.5-flash-lite',
-  'google/gemini-2.5-flash',
   'deepseek/deepseek-v4-flash',
   'qwen/qwen3.6-flash',
   'deepseek/deepseek-v4-pro',
@@ -54,7 +53,6 @@ const OTHER_IDS = [
 export const FALLBACK_GROUPS: ModelGroups = {
   recommended: [
     { id: 'google/gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', inPrice: 0.1, outPrice: 0.4, free: false },
-    { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', inPrice: 0.3, outPrice: 2.5, free: false },
     { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', inPrice: 0.09, outPrice: 0.18, free: false },
   ],
   cheaper: [
