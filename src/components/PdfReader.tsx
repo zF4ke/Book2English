@@ -8,7 +8,12 @@ import type { PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api';
 import { loadDocument } from '@/lib/pdf/loadPdf';
 import { extractLayout } from '@/lib/pdf/extract';
 import { translatePage, createLimiter, TranslateError, type Lang } from '@/lib/translate/client';
-import { clearBook } from '@/lib/cache/translationDB';
+import {
+  clearBook,
+  saveCurrentBook,
+  loadCurrentBook,
+  clearCurrentBook,
+} from '@/lib/cache/translationDB';
 import { DEFAULT_MODEL, FALLBACK_GROUPS, loadModels, type ModelGroups } from '@/lib/models';
 import TranslatedPage from './TranslatedPage';
 import SettingsSheet from './SettingsSheet';
@@ -70,6 +75,8 @@ export default function PdfReader() {
   const scrollThrottle = useRef(0);
   // Remembers the content point under the viewport center across a zoom change.
   const pendingAnchor = useRef<{ page: number; f: number } | null>(null);
+  const pendingScrollPage = useRef<number | null>(null);
+  const restoredRef = useRef(false);
 
   const pageWidth = useMemo(
     () => clamp(Math.round((containerWidth - 32) * zoom), 240, 6000),
@@ -138,29 +145,77 @@ export default function PdfReader() {
 
   useEffect(() => setPageInput(String(currentPage)), [currentPage]);
 
-  const onFile = useCallback(async (file: File) => {
-    setLoadingDoc(true);
-    setLoadError('');
-    try {
-      const buf = await file.arrayBuffer();
-      const [doc, hash] = await Promise.all([loadDocument(buf), hashFile(buf)]);
-      const p1 = await doc.getPage(1);
-      const vp = p1.getViewport({ scale: 1 });
-      setPageAspect(vp.height / vp.width);
-      setPdfDoc(doc);
-      setNumPages(doc.numPages);
-      setFileName(file.name);
-      setFileHash(hash);
-      setCurrentPage(1);
-      setVisible(new Set([1]));
-      setTranslations({});
-      inflight.current.clear();
-    } catch (e) {
-      setLoadError((e as Error)?.message || 'Could not open this PDF.');
-    } finally {
-      setLoadingDoc(false);
-    }
+  // Persist the current page per book so a refresh resumes where you left off.
+  useEffect(() => {
+    if (fileHash) localStorage.setItem(`bookPage:${fileHash}`, String(currentPage));
+  }, [currentPage, fileHash]);
+
+  const openBuffer = useCallback(async (buf: ArrayBuffer, name: string, startPage: number) => {
+    const [doc, hash] = await Promise.all([loadDocument(buf), hashFile(buf)]);
+    const p1 = await doc.getPage(1);
+    const vp = p1.getViewport({ scale: 1 });
+    const page = clamp(startPage || 1, 1, doc.numPages);
+    setPageAspect(vp.height / vp.width);
+    setPdfDoc(doc);
+    setNumPages(doc.numPages);
+    setFileName(name);
+    setFileHash(hash);
+    setCurrentPage(page);
+    setVisible(new Set([page]));
+    pendingScrollPage.current = page > 1 ? page : null;
+    setTranslations({});
+    inflight.current.clear();
+    return hash;
   }, []);
+
+  const onFile = useCallback(
+    async (file: File) => {
+      setLoadingDoc(true);
+      setLoadError('');
+      try {
+        const buf = await file.arrayBuffer();
+        const hash = await openBuffer(buf, file.name, 1);
+        localStorage.setItem(`bookPage:${hash}`, '1');
+        saveCurrentBook({ fileHash: hash, name: file.name, bytes: buf.slice(0) });
+      } catch (e) {
+        setLoadError((e as Error)?.message || 'Could not open this PDF.');
+      } finally {
+        setLoadingDoc(false);
+      }
+    },
+    [openBuffer]
+  );
+
+  // Restore the last-opened book on mount (persist across refresh).
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    (async () => {
+      const book = await loadCurrentBook();
+      if (!book) return;
+      const saved = Number(localStorage.getItem(`bookPage:${book.fileHash}`)) || 1;
+      setLoadingDoc(true);
+      try {
+        await openBuffer(book.bytes, book.name, saved);
+      } catch {
+        await clearCurrentBook();
+      } finally {
+        setLoadingDoc(false);
+      }
+    })();
+  }, [openBuffer]);
+
+  // After (re)opening, scroll to the remembered page once slots exist.
+  useEffect(() => {
+    if (!pdfDoc || !numPages) return;
+    const target = pendingScrollPage.current;
+    if (!target) return;
+    const id = setTimeout(() => {
+      slotEls.current.get(target)?.scrollIntoView({ block: 'start' });
+      pendingScrollPage.current = null;
+    }, 150);
+    return () => clearTimeout(id);
+  }, [pdfDoc, numPages]);
 
   // Ensure a page is translated (cache-aware). Cheap scale-1 layout for blocks.
   const ensurePage = useCallback(
@@ -364,7 +419,8 @@ export default function PdfReader() {
     return (
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center px-6">
         <div className="mb-10 text-center">
-          <p className="mb-3 text-xs uppercase tracking-[0.22em] text-[#9b8773]">Reader&apos;s desk</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/icon.svg" alt="" aria-hidden="true" className="mx-auto mb-4 h-14 w-14" />
           <h1 className="font-serif text-5xl font-semibold leading-tight text-[#2f251a]">Book to English</h1>
           <p className="mt-4 max-w-md text-[#6e5d4f]">
             Drop in a PDF and read it as if it were always in your language — same pages, same
@@ -410,6 +466,7 @@ export default function PdfReader() {
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2.5">
           <button
             onClick={() => {
+              clearCurrentBook();
               setPdfDoc(null);
               setFileHash('');
               setNumPages(0);

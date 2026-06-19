@@ -4,13 +4,16 @@
 
 const DB_NAME = 'book2english';
 const STORE = 'translations';
-const VERSION = 1;
+const BOOK_STORE = 'currentBook';
+const VERSION = 2;
 
 type PageRecord = {
   key: string; // `${fileHash}:${model}:${lang}:${page}`
   fileHash: string;
   blocks: Record<string, string>; // blockId -> translated text
 };
+
+export type StoredBook = { fileHash: string; name: string; bytes: ArrayBuffer };
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -28,11 +31,58 @@ function openDB(): Promise<IDBDatabase> {
         const store = db.createObjectStore(STORE, { keyPath: 'key' });
         store.createIndex('fileHash', 'fileHash', { unique: false });
       }
+      if (!db.objectStoreNames.contains(BOOK_STORE)) {
+        db.createObjectStore(BOOK_STORE);
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
   return dbPromise;
+}
+
+// Persist the currently-open PDF so a refresh resumes it instead of dropping
+// back to the upload screen. Only the most recent book is kept.
+export async function saveCurrentBook(book: StoredBook): Promise<void> {
+  try {
+    const db = await openDB();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(BOOK_STORE, 'readwrite');
+      tx.objectStore(BOOK_STORE).put(book, 'last');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+export async function loadCurrentBook(): Promise<StoredBook | null> {
+  try {
+    const db = await openDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(BOOK_STORE, 'readonly');
+      const req = tx.objectStore(BOOK_STORE).get('last');
+      req.onsuccess = () => resolve((req.result as StoredBook | undefined) ?? null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function clearCurrentBook(): Promise<void> {
+  try {
+    const db = await openDB();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(BOOK_STORE, 'readwrite');
+      tx.objectStore(BOOK_STORE).delete('last');
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // ignore
+  }
 }
 
 function pageKey(fileHash: string, model: string, lang: string, page: number) {
