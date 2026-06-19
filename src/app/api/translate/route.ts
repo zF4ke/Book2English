@@ -82,7 +82,7 @@ export async function POST(req: Request) {
       headers: {
         Authorization: `Bearer ${key}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://book2english.vercel.app',
+        'HTTP-Referer': 'https://book2english.zf4ke.me',
         'X-Title': 'Book2English',
       },
       body: JSON.stringify({

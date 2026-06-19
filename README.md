@@ -9,7 +9,7 @@ they were. It feels like you're reading the original book — just in your langu
 
 Everything stays in your browser. No accounts, no uploads, just you and the book.
 
-**[Try it live →](https://book2english.vercel.app/)**
+**[Try it live →](https://book2english.zf4ke.me/)**
 
 ![Reading desk interface](images/frontpage.png)
 
